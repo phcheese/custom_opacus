@@ -248,6 +248,12 @@ class DPOptimizer(Optimizer):
 
         for p in self.params:
             p.summed_grad = None
+        #for patient level privacy: Get the num_slices_per_patient value from normal optimizer
+        try:
+            self.num_slices_per_patient = self.original_optimizer.num_slices_per_patient
+        except:
+            raise ValueError('''The optimizer passed to the make_private function does not have the value num_slices_per_patient.
+                             This is necessary for patient-level privacy. Make sure to set optimizer.num_slices_per_patient!''')
 
     def _get_flat_grad_sample(self, p: torch.Tensor):
         """
@@ -388,37 +394,78 @@ class DPOptimizer(Optimizer):
 
         self.step_hook = fn
 
-    def clip_and_accumulate(self):
-        """
-        Performs gradient clipping.
-        Stores clipped and aggregated gradients into `p.summed_grad```
-        """
+    # #Original function for slice-level privacy
+    # def clip_and_accumulate(self):
+    #     """
+    #     Performs gradient clipping.
+    #     Stores clipped and aggregated gradients into `p.summed_grad```
+    #     """
+    #                                                         #self.grad_samples:  list w. len(#params), each el: [ #sample in batch,   grad_dim1,   grad_dim2, ... ]
+    #     if len(self.grad_samples[0]) == 0:
+    #         # Empty batch
+    #         per_sample_clip_factor = torch.zeros(
+    #             (0,), device=self.grad_samples[0].device
+    #         )
+    #     else:
+    #         per_param_norms = [
+    #             g.reshape(len(g), -1).norm(2, dim=-1) for g in self.grad_samples      #before norm: each g: [#samples, grad_dim1*grad_dim2*...], after: [#samples]
+    #         ]                                                                         #per_param_norm: list w. len(#params), each el: [#samples]
+    
+    #         per_sample_norms = torch.stack(per_param_norms, dim=1).norm(2, dim=1)     #per_sample_norm: before norm: [#samples, #params], after: [#samples] 
+    #         per_sample_clip_factor = (
+    #             self.max_grad_norm / (per_sample_norms + 1e-6)
+    #         ).clamp(max=1.0)
 
+    #     for p in self.params:
+    #         _check_processed_flag(p.grad_sample)
+    #         grad_sample = self._get_flat_grad_sample(p)                               #for each param p: [#samples, grad_dim1*grad_dim2*....]
+    #         grad = contract("i,i...", per_sample_clip_factor, grad_sample)            #applied elementw. multiplication with [#sampels in batch] factors, still same dim
+    #                                                                                   #grad is now probably of shape [grad_dim1, grad_dim2, ...], accumulated over all samples
+
+    #         if p.summed_grad is not None:
+    #             p.summed_grad += grad
+    #         else:
+    #             p.summed_grad = grad
+
+    #         _mark_as_processed(p.grad_sample)
+    
+    ####PATIENT-LEVEL PRIVATE VERSION
+    def clip_and_accumulate(self):                                                      #self.grad_samples:  list w. len(#params), each el: [ #samples in batch,   grad_dim1,   grad_dim2, ... ]
+        num_slices_per_patient = self.num_slices_per_patient
         if len(self.grad_samples[0]) == 0:
-            # Empty batch
-            per_sample_clip_factor = torch.zeros(
-                (0,), device=self.grad_samples[0].device
-            )
-        else:
-            per_param_norms = [
-                g.reshape(len(g), -1).norm(2, dim=-1) for g in self.grad_samples
-            ]
-            per_sample_norms = torch.stack(per_param_norms, dim=1).norm(2, dim=1)
-            per_sample_clip_factor = (
-                self.max_grad_norm / (per_sample_norms + 1e-6)
-            ).clamp(max=1.0)
+            return  # Handle empty batch scenario
 
+        num_patients = len(self.grad_samples[0]) // num_slices_per_patient
         for p in self.params:
             _check_processed_flag(p.grad_sample)
-            grad_sample = self._get_flat_grad_sample(p)
-            grad = contract("i,i...", per_sample_clip_factor, grad_sample)
+            p.summed_grad = None  # Reset or initialize summed_grad
 
-            if p.summed_grad is not None:
-                p.summed_grad += grad
-            else:
-                p.summed_grad = grad
+            for patient_idx in range(num_patients):
+                # Calculate start and end indices for slices belonging to the current patient
+                start_idx = patient_idx * num_slices_per_patient
+                end_idx = start_idx + num_slices_per_patient
+
+                # Segmenting this parameter's gradients for the current patient
+                patient_grad_samples = p.grad_sample[start_idx:end_idx]
+
+                # Aggregating gradients for the current patient
+                aggregated_grad = torch.sum(patient_grad_samples, dim=0)
+
+                # Calculate norm and clipping factor for aggregated gradients
+                aggregated_grad_norm = aggregated_grad.norm(2)
+                clip_factor = (self.max_grad_norm / (aggregated_grad_norm + 1e-6)).clamp(max=1.0)
+
+                # Apply clipping
+                clipped_aggregated_grad = aggregated_grad * clip_factor
+
+                # Accumulate clipped gradients
+                if p.summed_grad is not None:
+                    p.summed_grad += clipped_aggregated_grad
+                else:
+                    p.summed_grad = clipped_aggregated_grad
 
             _mark_as_processed(p.grad_sample)
+
 
     def add_noise(self):
         """

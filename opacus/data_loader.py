@@ -104,17 +104,16 @@ def shape_safe(x: Any) -> Tuple:
     return getattr(x, "shape", ())
 
 
-def dtype_safe(x: Any) -> Union[torch.dtype, Type]:
+def dtype_safe(x: Any) -> torch.dtype:
     """
-    Exception-safe getter for ``dtype`` attribute
-
-    Args:
-        x: any object
-
-    Returns:
-        ``x.dtype`` if attribute exists, type of x otherwise
+    Modified to ensure the returned value is a torch.dtype.
     """
-    return getattr(x, "dtype", type(x))
+    dtype = getattr(x, "dtype", type(x))
+    if isinstance(dtype, Type):
+        # Assuming float as a default, you might need a more sophisticated mapping
+        return torch.get_default_dtype()
+    return dtype
+
 
 
 class DPDataLoader(DataLoader):
