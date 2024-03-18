@@ -249,6 +249,7 @@ class DPOptimizer(Optimizer):
         for p in self.params:
             p.summed_grad = None
         #for patient level privacy: Get the num_slices_per_patient value from normal optimizer
+        print("Using custom opacus optimizer for patient-level privacy")
         try:
             self.num_slices_per_patient = self.original_optimizer.num_slices_per_patient
         except:
@@ -430,15 +431,17 @@ class DPOptimizer(Optimizer):
     #         _mark_as_processed(p.grad_sample)
     
     ####PATIENT-LEVEL PRIVATE VERSION
-    def clip_and_accumulate(self):                                                      #self.grad_samples:  list w. len(#params), each el: [ #samples in batch,   grad_dim1,   grad_dim2, ... ]
+    def clip_and_accumulate(self):                                                    #self.grad_samples:  list w. len(#params), each el: [ #samples in batch,   grad_dim1,   grad_dim2, ... ]
         num_slices_per_patient = self.num_slices_per_patient
-        if len(self.grad_samples[0]) == 0:
-            return  # Handle empty batch scenario
-
         num_patients = len(self.grad_samples[0]) // num_slices_per_patient
+        #print(f"Called clip_and_accumulate with {num_patients} patients")
+        if len(self.grad_samples[0]) == 0:
+            return
+        
+        
         for p in self.params:
             _check_processed_flag(p.grad_sample)
-            p.summed_grad = None  # Reset or initialize summed_grad
+            #p.summed_grad = None  # Reset or initialize summed_grad
 
             for patient_idx in range(num_patients):
                 # Calculate start and end indices for slices belonging to the current patient
@@ -447,22 +450,31 @@ class DPOptimizer(Optimizer):
 
                 # Segmenting this parameter's gradients for the current patient
                 patient_grad_samples = p.grad_sample[start_idx:end_idx]
+                #print(f"patient_grad_samples: {patient_grad_samples.shape}")
+
 
                 # Aggregating gradients for the current patient
                 aggregated_grad = torch.sum(patient_grad_samples, dim=0)
+                #print(f"aggregated_grad: {aggregated_grad.shape}")
 
                 # Calculate norm and clipping factor for aggregated gradients
                 aggregated_grad_norm = aggregated_grad.norm(2)
-                clip_factor = (self.max_grad_norm / (aggregated_grad_norm + 1e-6)).clamp(max=1.0)
+                #print(f"aggregated_grad_norm: {aggregated_grad_norm}")
+                clip_factor = ((self.max_grad_norm*num_slices_per_patient) / (aggregated_grad_norm + 1e-6)).clamp(max=1.0)
+                #print(f"clip_factor: {clip_factor}")
 
                 # Apply clipping
                 clipped_aggregated_grad = aggregated_grad * clip_factor
+                #print(f"clipped_aggregated_grad: {clipped_aggregated_grad.shape}")
 
                 # Accumulate clipped gradients
                 if p.summed_grad is not None:
                     p.summed_grad += clipped_aggregated_grad
                 else:
                     p.summed_grad = clipped_aggregated_grad
+                    #print("New p.summed_grad")
+                #raise Exception("Hi")
+
 
             _mark_as_processed(p.grad_sample)
 
