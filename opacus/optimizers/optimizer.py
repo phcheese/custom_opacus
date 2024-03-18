@@ -437,7 +437,7 @@ class DPOptimizer(Optimizer):
         #print(f"Called clip_and_accumulate with {num_patients} patients")
         if len(self.grad_samples[0]) == 0:
             return
-        #else
+        #else:
         
         for p in self.params:
             _check_processed_flag(p.grad_sample)
