@@ -460,7 +460,7 @@ class DPOptimizer(Optimizer):
                 # Calculate norm and clipping factor for aggregated gradients
                 aggregated_grad_norm = aggregated_grad.norm(2)
                 #print(f"aggregated_grad_norm: {aggregated_grad_norm}")
-                clip_factor = ((self.max_grad_norm*num_slices_per_patient) / (aggregated_grad_norm + 1e-6)).clamp(max=1.0)
+                clip_factor = ((self.max_grad_norm) / (aggregated_grad_norm + 1e-6)).clamp(max=1.0)
                 #print(f"clip_factor: {clip_factor}")
 
                 # Apply clipping
